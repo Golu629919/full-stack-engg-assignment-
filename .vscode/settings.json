@@ -1,0 +1,5 @@
+{
+  "python.testing.unittestEnabled": true,
+  "python.testing.unittestArgs": ["-v", "-s", "./tests", "-t", ".", "-p", "test_*.py"],
+  "files.exclude": { "**/__pycache__": true }
+}

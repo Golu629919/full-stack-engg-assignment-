@@ -1,0 +1,53 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Newtonite Ops</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#666;--bd:#ddd;--ac:#2557d6;--card:#f7f7f8}
+@media(prefers-color-scheme:dark){:root{--bg:#161618;--fg:#eee;--mut:#999;--bd:#333;--ac:#6c93ff;--card:#212124}}
+body{font:14px system-ui;margin:0;background:var(--bg);color:var(--fg)}header{display:flex;gap:8px;padding:10px;border-bottom:1px solid var(--bd);align-items:center;flex-wrap:wrap}
+main{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px}@media(max-width:800px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:8px 10px;margin:6px 0;cursor:pointer}
+.tag{font-size:11px;padding:1px 6px;border-radius:9px;border:1px solid var(--bd);color:var(--mut)}.urgent,.high{color:#d33;border-color:#d33}
+input,select,button,textarea{font:inherit;padding:5px;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--fg)}button{cursor:pointer}button.p{background:var(--ac);color:#fff;border:0}
+#toast{position:fixed;bottom:12px;left:12px;background:#333;color:#fff;padding:8px 12px;border-radius:6px;display:none}.ev{border-left:2px solid var(--bd);padding-left:8px;margin:6px 0;color:var(--mut)}h3{margin:10px 0 4px}
+</style></head><body>
+<header><b>Newtonite Ops</b><select id="who"></select><span id="role" class="tag"></span><span id="notif" class="tag" title="notifications"></span>
+<input id="q" placeholder="Search…"><select id="fs"><option value="">any status</option><option>open</option><option>in_progress</option><option>review</option><option>done</option><option>cancelled</option></select>
+<select id="fa"><option value="">any assignee</option><option value="me">mine</option><option value="none">unassigned</option></select><button class="p" id="new">+ New</button></header>
+<main><section><h3>Needs attention</h3><div id="att"></div><h3>All work</h3><div id="list"></div><button id="more" style="display:none">Load more</button></section>
+<section id="detail"><i style="color:var(--mut)">Select an item</i></section></main><div id="toast"></div>
+<script>
+const $=id=>document.getElementById(id);let tok,me,teams=[],cur=null,cursor=null;
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function toast(m){const t=$('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',3500)}
+async function api(m,p,body,key){const r=await fetch(p,{method:m,headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok,...(key?{'Idempotency-Key':key}:{})},body:body?JSON.stringify(body):undefined});
+ const d=await r.json().catch(()=>({}));return{ok:r.ok,status:r.status,d}}
+async function login(u){tok=(await (await fetch('/api/login',{method:'POST',body:JSON.stringify({username:u})})).json()).token;localStorage.u=u;
+ const r=await api('GET','/api/me');me=r.d.user;teams=r.d.teams;$('role').textContent=teams.map(t=>t.name+':'+t.role).join(' · ');cur=null;$('detail').innerHTML='';refresh()}
+const row=i=>`<div class="card" data-id="${i.id}"><b>${esc(i.title)}</b> <span class="tag ${i.priority}">${i.priority}</span> <span class="tag">${i.status}</span>
+ <span class="tag">${i.assignee_id?(i.assignee_id==me.id?'you':'#'+i.assignee_id):'unassigned'}</span>${i.reason?` <span class="tag">${i.reason}</span>`:''}</div>`;
+async function loadList(append){const p=new URLSearchParams({limit:25,status:$('fs').value,assignee:$('fa').value,q:$('q').value});if(append&&cursor)p.set('cursor',cursor);
+ const r=await api('GET','/api/items?'+p);if(!r.ok)return;cursor=r.d.next_cursor;$('list').innerHTML=(append?$('list').innerHTML:'')+r.d.items.map(row).join('')||'<i>No items</i>';$('more').style.display=cursor?'':'none'}
+async function refresh(){loadList();const s=await api('GET','/api/summary');if(s.ok)$('att').innerHTML=s.d.attention.map(row).join('')||'<i>Nothing needs attention 🎉</i>';
+ const n=await api('GET','/api/notifications');if(n.ok)$('notif').textContent='🔔 '+n.d.notifications.filter(x=>!x.read).length;if(cur)open_(cur,true)}
+async function open_(id,quiet){cur=id;const r=await api('GET','/api/items/'+id);if(!r.ok)return toast(r.d.error);const i=r.d.item,mgr=['manager','admin'].includes(i.role),mine=i.assignee_id==me.id;
+ const nexts={open:['in_progress','cancelled'],in_progress:['review','open','cancelled'],review:['done','in_progress']}[i.status]||[];
+ if(quiet&&document.activeElement&&$('detail').contains(document.activeElement))return; // don't clobber what the user is typing
+ $('detail').innerHTML=`<h3>${esc(i.title)}</h3><p>${esc(i.description)}</p><p><span class="tag ${i.priority}">${i.priority}</span> <span class="tag">${i.status}</span> <span class="tag">v${i.version}</span> owner: <b>${esc(i.assignee_name||'nobody')}</b>${i.needs_approval?' <span class="tag">needs approval</span>':''}</p>
+ <p>${!i.assignee_id&&i.role!='viewer'?'<button class="p" id="claim">Claim</button> ':''}${(mine||mgr)?nexts.map(n=>`<button data-to="${n}">→ ${n}</button>`).join(' '):''}
+ ${mgr?`<select id="asg"><option value="">assign…</option>${i.members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select><select id="pri">${['low','normal','high','urgent'].map(p=>`<option ${p==i.priority?'selected':''}>${p}</option>`)}</select>`:''}</p>
+ ${i.role!='viewer'?'<textarea id="cb" rows="2" style="width:95%" placeholder="Comment"></textarea><button id="cs">Comment</button>':''}<h3>History</h3>
+ ${r.d.events.map(e=>`<div class="ev"><b>${esc(e.actor)}</b> ${e.type} ${e.type=='comment'?esc(e.payload.body):esc(JSON.stringify(e.payload))} <small>${new Date(e.created_at).toLocaleString()}</small></div>`).join('')}`;
+ const act=async(a,b)=>{const r=await api('POST',`/api/items/${id}/${a}`,{version:i.version,...b},crypto.randomUUID());
+  if(!r.ok){toast(r.status==409?'Conflict: '+r.d.error+' — refreshed':r.d.error);}refresh()};
+ if($('claim'))$('claim').onclick=()=>{$('claim').disabled=true;$('detail').querySelector('b').after(' (claiming…)');act('claim',{})}; // optimistic hint; server decides, view reconciles via refresh
+ $('detail').querySelectorAll('[data-to]').forEach(b=>b.onclick=()=>act('transition',{to:b.dataset.to}));
+ if($('asg'))$('asg').onchange=e=>act('assign',{user_id:+e.target.value});if($('pri'))$('pri').onchange=e=>act('update',{priority:e.target.value});
+ if($('cs'))$('cs').onclick=()=>$('cb').value.trim()&&act('comment',{body:$('cb').value})}
+$('new').onclick=async()=>{const t=prompt('Title?');if(!t)return;const team=teams.length>1?+prompt('Team id: '+teams.map(x=>x.id+'='+x.name).join(', '),teams[0].id):teams[0].id;
+ const key=crypto.randomUUID();let r;for(let a=0;a<3;a++){try{r=await api('POST','/api/items',{team_id:team,title:t},key);break}catch(e){}} // retry reuses key -> no duplicates
+ r&&r.ok?(toast('Created'),refresh(),open_(r.d.id)):toast(r?r.d.error:'Network error')};
+document.addEventListener('click',e=>{const c=e.target.closest('.card');if(c)open_(+c.dataset.id)});
+let tm;$('q').oninput=()=>{clearTimeout(tm);tm=setTimeout(()=>loadList(),300)};$('fs').onchange=$('fa').onchange=()=>loadList();$('more').onclick=()=>loadList(true);
+$('who').innerHTML=['alice','bob','carol','dave','erin'].map(u=>`<option>${u}</option>`).join('');$('who').onchange=e=>login(e.target.value);
+$('who').value=localStorage.u||'carol';login($('who').value);setInterval(()=>document.hidden||refresh(),5000);
+</script></body></html>
